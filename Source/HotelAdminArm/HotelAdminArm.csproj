@@ -1,0 +1,20 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Authors>Терехов С. М.</Authors>
+    <Company>Терехов С. М.</Company>
+    <AssemblyTitle>АРМ администратора гостиницы</AssemblyTitle>
+    <Description>Курсовая работа Терехова С. М.: АРМ администратора гостиницы</Description>
+    <Copyright>© Терехов С. М., 2026</Copyright>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.6" />
+  </ItemGroup>
+
+</Project>
