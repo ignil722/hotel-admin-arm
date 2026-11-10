@@ -1,5 +1,6 @@
 using System.Data;
 using HotelAdminArm.Data;
+using HotelAdminArm.Domain;
 
 namespace HotelAdminArm;
 
@@ -15,7 +16,7 @@ public sealed partial class MainForm
         };
 
         _roomsGrid = CreateGrid();
-        _roomsGrid.SelectionChanged += (_, _) => LoadSelectedRoom();
+        _roomsGrid.CurrentCellChanged += (_, _) => RunSafely(LoadSelectedRoom);
         _roomsGrid.Dock = DockStyle.Fill;
 
         _roomNumberText = TextBoxSingle();
@@ -24,8 +25,9 @@ public sealed partial class MainForm
         _roomCapacityNumeric = CountNumeric(10);
         _roomPriceNumeric = MoneyNumeric();
         _roomStatusCombo = Combo();
-        _roomStatusCombo.DataSource = new[] { "Свободен", "Занят", "Ремонт" };
+        _roomStatusCombo.DataSource = new[] { "Доступен", "Ремонт" };
         _roomNotesText = TextBoxMulti();
+        _roomActiveCheck = new CheckBox { Text="Номер активен",Checked=true,AutoSize=true };
         _roomPhotoBox = new PictureBox
         {
             BorderStyle = BorderStyle.FixedSingle,
@@ -41,9 +43,9 @@ public sealed partial class MainForm
         addButton.Click += (_, _) => SaveRoom(false);
         var updateButton = CreateButton("Сохранить");
         updateButton.Click += (_, _) => SaveRoom(true);
-        var deleteButton = CreateButton("Удалить");
+        var deleteButton = CreateButton("Архивировать");
         deleteButton.Click += (_, _) => DeleteRoom();
-        var clearButton = CreateButton("Очистить");
+        var clearButton = CreateButton("Новая запись");
         clearButton.Click += (_, _) => ClearRoomForm();
 
         var editor = CreateEditorLayout(10);
@@ -52,7 +54,7 @@ public sealed partial class MainForm
         AddField(editor, "Этаж", _roomFloorNumeric, 2);
         AddField(editor, "Мест", _roomCapacityNumeric, 3);
         AddField(editor, "Цена/сутки", _roomPriceNumeric, 4);
-        AddField(editor, "Статус", _roomStatusCombo, 5);
+        AddField(editor, "Состояние", ButtonsPanel(_roomStatusCombo,_roomActiveCheck), 5);
         AddField(editor, "Примечание", _roomNotesText, 6);
         AddField(editor, "Фото", _roomPhotoBox, 7);
         editor.Controls.Add(new Label(), 0, 8);
@@ -60,11 +62,7 @@ public sealed partial class MainForm
         editor.Controls.Add(new Label(), 0, 9);
         editor.Controls.Add(ButtonsPanel(addButton, updateButton, deleteButton, clearButton), 1, 9);
 
-        editor.Dock = DockStyle.Right;
-        editor.Width = 460;
-        editor.MinimumSize = new Size(440, 0);
-        layout.Controls.Add(_roomsGrid);
-        layout.Controls.Add(editor);
+        layout.Controls.Add(Workspace(SearchableGrid(_roomsGrid),editor));
         page.Controls.Add(layout);
         return page;
     }
@@ -79,13 +77,15 @@ public sealed partial class MainForm
         };
 
         _guestsGrid = CreateGrid();
-        _guestsGrid.SelectionChanged += (_, _) => LoadSelectedGuest();
+        _guestsGrid.CurrentCellChanged += (_, _) => RunSafely(LoadSelectedGuest);
         _guestsGrid.Dock = DockStyle.Fill;
 
         _guestLastNameText = TextBoxSingle();
         _guestFirstNameText = TextBoxSingle();
         _guestMiddleNameText = TextBoxSingle();
-        _guestBirthDatePicker = DatePicker(DateTime.Today.AddYears(-25));
+        _guestBirthDatePicker = DatePicker(Database.Today.AddYears(-25));
+        _guestBirthDatePicker.ShowCheckBox=true;
+        _guestActiveCheck=new CheckBox {Text="Гость активен",Checked=true,AutoSize=true};
         _guestPassportText = TextBoxSingle();
         _guestPhoneText = TextBoxSingle();
         _guestEmailText = TextBoxSingle();
@@ -95,16 +95,16 @@ public sealed partial class MainForm
         addButton.Click += (_, _) => SaveGuest(false);
         var updateButton = CreateButton("Сохранить");
         updateButton.Click += (_, _) => SaveGuest(true);
-        var deleteButton = CreateButton("Удалить");
+        var deleteButton = CreateButton("Архивировать");
         deleteButton.Click += (_, _) => DeleteGuest();
-        var clearButton = CreateButton("Очистить");
+        var clearButton = CreateButton("Новая запись");
         clearButton.Click += (_, _) => ClearGuestForm();
 
         var editor = CreateEditorLayout(9);
         AddField(editor, "Фамилия", _guestLastNameText, 0);
         AddField(editor, "Имя", _guestFirstNameText, 1);
         AddField(editor, "Отчество", _guestMiddleNameText, 2);
-        AddField(editor, "Дата рождения", _guestBirthDatePicker, 3);
+        AddField(editor, "Дата рождения", ButtonsPanel(_guestBirthDatePicker,_guestActiveCheck), 3);
         AddField(editor, "Паспорт", _guestPassportText, 4);
         AddField(editor, "Телефон", _guestPhoneText, 5);
         AddField(editor, "Email", _guestEmailText, 6);
@@ -112,29 +112,12 @@ public sealed partial class MainForm
         editor.Controls.Add(new Label(), 0, 8);
         editor.Controls.Add(ButtonsPanel(addButton, updateButton, deleteButton, clearButton), 1, 8);
 
-        editor.Dock = DockStyle.Right;
-        editor.Width = 460;
-        editor.MinimumSize = new Size(440, 0);
-        layout.Controls.Add(_guestsGrid);
-        layout.Controls.Add(editor);
+        layout.Controls.Add(Workspace(SearchableGrid(_guestsGrid),editor));
         page.Controls.Add(layout);
         return page;
     }
 
-    private void RefreshRooms()
-    {
-        SetGrid(
-            _roomsGrid,
-            Database.Query(
-                """
-                SELECT r.Id, r.Number AS 'Номер', rt.Name AS 'Тип', r.Floor AS 'Этаж',
-                       r.Capacity AS 'Мест', r.DailyPrice AS 'Цена за сутки',
-                       r.Status AS 'Статус', r.Notes AS 'Примечание'
-                FROM Rooms r
-                JOIN RoomTypes rt ON rt.Id = r.RoomTypeId
-                ORDER BY r.Number;
-                """));
-    }
+    private void RefreshRooms() => SetGrid(_roomsGrid, HotelService.Rooms());
 
     private void RefreshGuests()
     {
@@ -144,7 +127,7 @@ public sealed partial class MainForm
                 """
                 SELECT Id, LastName AS 'Фамилия', FirstName AS 'Имя', MiddleName AS 'Отчество',
                        BirthDate AS 'Дата рождения', Passport AS 'Паспорт',
-                       Phone AS 'Телефон', Email, Address AS 'Адрес'
+                       Phone AS 'Телефон', Email, Address AS 'Адрес', CASE IsActive WHEN 1 THEN 'Да' ELSE 'Нет' END AS 'Активен'
                 FROM Guests
                 ORDER BY LastName, FirstName;
                 """));
@@ -160,6 +143,7 @@ public sealed partial class MainForm
         var id = SelectedId(_roomsGrid);
         if (id == 0)
         {
+            if(_roomEditId>0)ClearRoomForm();
             return;
         }
 
@@ -169,12 +153,14 @@ public sealed partial class MainForm
             return;
         }
 
+        _roomEditId=id;
+        _roomActiveCheck.Checked=Convert.ToInt32(row["IsActive"])==1;
         _roomNumberText.Text = Convert.ToString(row["Number"]);
         SelectComboValue(_roomTypeCombo, row["RoomTypeId"]);
         _roomFloorNumeric.Value = Convert.ToDecimal(row["Floor"]);
         _roomCapacityNumeric.Value = Convert.ToDecimal(row["Capacity"]);
-        _roomPriceNumeric.Value = Convert.ToDecimal(row["DailyPrice"]);
-        _roomStatusCombo.SelectedItem = Convert.ToString(row["Status"]);
+        _roomPriceNumeric.Value = HotelService.Rubles(Convert.ToInt64(row["PriceKopecks"]));
+        _roomStatusCombo.SelectedIndex = Convert.ToInt32(row["UnderMaintenance"]);
         _roomNotesText.Text = Convert.ToString(row["Notes"]);
 
         _selectedRoomPhoto = row["Photo"] == DBNull.Value ? null : (byte[])row["Photo"];
@@ -191,6 +177,7 @@ public sealed partial class MainForm
         var id = SelectedId(_guestsGrid);
         if (id == 0)
         {
+            if(_guestEditId>0)ClearGuestForm();
             return;
         }
 
@@ -200,164 +187,46 @@ public sealed partial class MainForm
             return;
         }
 
+        _guestEditId=id;
+        _guestActiveCheck.Checked=Convert.ToInt32(row["IsActive"])==1;
         _guestLastNameText.Text = Convert.ToString(row["LastName"]);
         _guestFirstNameText.Text = Convert.ToString(row["FirstName"]);
         _guestMiddleNameText.Text = Convert.ToString(row["MiddleName"]);
         _guestBirthDatePicker.Value = ParseDate(row["BirthDate"]);
+        _guestBirthDatePicker.Checked=row["BirthDate"]!=DBNull.Value;
         _guestPassportText.Text = Convert.ToString(row["Passport"]);
         _guestPhoneText.Text = Convert.ToString(row["Phone"]);
         _guestEmailText.Text = Convert.ToString(row["Email"]);
         _guestAddressText.Text = Convert.ToString(row["Address"]);
     }
 
-    private void SaveRoom(bool update)
-    {
-        RunSafely(() =>
-        {
-            if (string.IsNullOrWhiteSpace(_roomNumberText.Text))
-            {
-                throw new InvalidOperationException("Введите номер комнаты.");
-            }
+    private void SaveRoom(bool update) => RunSafely(() => {
+        if(update && _roomEditId==0)throw new InvalidOperationException("Выберите номер для изменения.");
+        var id=HotelService.SaveRoom(update?_roomEditId:0,_roomNumberText.Text,ComboId(_roomTypeCombo),(int)_roomFloorNumeric.Value,(int)_roomCapacityNumeric.Value,_roomPriceNumeric.Value,_roomStatusCombo.SelectedIndex==1,_roomActiveCheck.Checked,_roomNotesText.Text,_selectedRoomPhoto);
+        _roomEditId=id; RefreshAll(); SelectGridId(_roomsGrid,id); LoadSelectedRoom();
+    });
 
-            if (update)
-            {
-                var id = SelectedId(_roomsGrid);
-                if (id == 0)
-                {
-                    throw new InvalidOperationException("Выберите номер для изменения.");
-                }
+    private void SaveGuest(bool update) => RunSafely(() => {
+        if(update && _guestEditId==0)throw new InvalidOperationException("Выберите гостя для изменения.");
+        var id=HotelService.SaveGuest(update?_guestEditId:0,_guestLastNameText.Text,_guestFirstNameText.Text,_guestMiddleNameText.Text,_guestBirthDatePicker.Checked?_guestBirthDatePicker.Value.Date:null,_guestPassportText.Text,_guestPhoneText.Text,_guestEmailText.Text,_guestAddressText.Text,_guestActiveCheck.Checked);
+        _guestEditId=id; RefreshAll(); SelectGridId(_guestsGrid,id); LoadSelectedGuest();
+    });
 
-                Database.Execute(
-                    """
-                    UPDATE Rooms
-                       SET Number = @number, RoomTypeId = @roomTypeId, Floor = @floor,
-                           Capacity = @capacity, DailyPrice = @dailyPrice, Status = @status,
-                           Notes = @notes, Photo = @photo
-                     WHERE Id = @id;
-                    """,
-                    Database.P("number", _roomNumberText.Text.Trim()),
-                    Database.P("roomTypeId", ComboId(_roomTypeCombo)),
-                    Database.P("floor", (int)_roomFloorNumeric.Value),
-                    Database.P("capacity", (int)_roomCapacityNumeric.Value),
-                    Database.P("dailyPrice", _roomPriceNumeric.Value),
-                    Database.P("status", Convert.ToString(_roomStatusCombo.SelectedItem)),
-                    Database.P("notes", _roomNotesText.Text.Trim()),
-                    Database.P("photo", _selectedRoomPhoto),
-                    Database.P("id", id));
-            }
-            else
-            {
-                Database.Execute(
-                    """
-                    INSERT INTO Rooms (Number, RoomTypeId, Floor, Capacity, DailyPrice, Status, Notes, Photo)
-                    VALUES (@number, @roomTypeId, @floor, @capacity, @dailyPrice, @status, @notes, @photo);
-                    """,
-                    Database.P("number", _roomNumberText.Text.Trim()),
-                    Database.P("roomTypeId", ComboId(_roomTypeCombo)),
-                    Database.P("floor", (int)_roomFloorNumeric.Value),
-                    Database.P("capacity", (int)_roomCapacityNumeric.Value),
-                    Database.P("dailyPrice", _roomPriceNumeric.Value),
-                    Database.P("status", Convert.ToString(_roomStatusCombo.SelectedItem)),
-                    Database.P("notes", _roomNotesText.Text.Trim()),
-                    Database.P("photo", _selectedRoomPhoto));
-            }
+    private void DeleteRoom() => RunSafely(() => {
+        if(_roomEditId==0)return;
+        if(MessageBox.Show("Сделать номер неактивным? История сохранится.",Text,MessageBoxButtons.YesNo)!=DialogResult.Yes)return;
+        _roomActiveCheck.Checked=false; SaveRoom(true);
+    });
 
-            RefreshAll();
-            MessageBox.Show("Данные номера сохранены.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-        });
-    }
-
-    private void SaveGuest(bool update)
-    {
-        RunSafely(() =>
-        {
-            if (string.IsNullOrWhiteSpace(_guestLastNameText.Text) ||
-                string.IsNullOrWhiteSpace(_guestFirstNameText.Text) ||
-                string.IsNullOrWhiteSpace(_guestPassportText.Text))
-            {
-                throw new InvalidOperationException("Введите фамилию, имя и паспорт гостя.");
-            }
-
-            var sql = update
-                ? """
-                  UPDATE Guests
-                     SET LastName = @lastName, FirstName = @firstName, MiddleName = @middleName,
-                         BirthDate = @birthDate, Passport = @passport, Phone = @phone,
-                         Email = @email, Address = @address
-                   WHERE Id = @id;
-                  """
-                : """
-                  INSERT INTO Guests (LastName, FirstName, MiddleName, BirthDate, Passport, Phone, Email, Address)
-                  VALUES (@lastName, @firstName, @middleName, @birthDate, @passport, @phone, @email, @address);
-                  """;
-
-            var id = SelectedId(_guestsGrid);
-            if (update && id == 0)
-            {
-                throw new InvalidOperationException("Выберите гостя для изменения.");
-            }
-
-            var parameters = new List<Microsoft.Data.Sqlite.SqliteParameter>
-            {
-                Database.P("lastName", _guestLastNameText.Text.Trim()),
-                Database.P("firstName", _guestFirstNameText.Text.Trim()),
-                Database.P("middleName", _guestMiddleNameText.Text.Trim()),
-                Database.P("birthDate", _guestBirthDatePicker.Value),
-                Database.P("passport", _guestPassportText.Text.Trim()),
-                Database.P("phone", _guestPhoneText.Text.Trim()),
-                Database.P("email", _guestEmailText.Text.Trim()),
-                Database.P("address", _guestAddressText.Text.Trim())
-            };
-
-            if (update)
-            {
-                parameters.Add(Database.P("id", id));
-            }
-
-            Database.Execute(sql, parameters.ToArray());
-            RefreshAll();
-            MessageBox.Show("Данные гостя сохранены.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-        });
-    }
-
-    private void DeleteRoom()
-    {
-        RunSafely(() =>
-        {
-            var id = SelectedId(_roomsGrid);
-            if (id == 0)
-            {
-                return;
-            }
-
-            if (MessageBox.Show("Удалить выбранный номер?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-            {
-                Database.Execute("DELETE FROM Rooms WHERE Id = @id;", Database.P("id", id));
-                RefreshAll();
-            }
-        });
-    }
-
-    private void DeleteGuest()
-    {
-        RunSafely(() =>
-        {
-            var id = SelectedId(_guestsGrid);
-            if (id == 0)
-            {
-                return;
-            }
-
-            if (MessageBox.Show("Удалить выбранного гостя?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-            {
-                Database.Execute("DELETE FROM Guests WHERE Id = @id;", Database.P("id", id));
-                RefreshAll();
-            }
-        });
-    }
+    private void DeleteGuest() => RunSafely(() => {
+        if(_guestEditId==0)return;
+        if(MessageBox.Show("Сделать гостя неактивным? История сохранится.",Text,MessageBoxButtons.YesNo)!=DialogResult.Yes)return;
+        _guestActiveCheck.Checked=false; SaveGuest(true);
+    });
 
     private void ClearRoomForm()
     {
+        _roomEditId=0; _roomsGrid.ClearSelection(); _roomsGrid.CurrentCell=null; _roomActiveCheck.Checked=true;
         _roomNumberText.Clear();
         _roomFloorNumeric.Value = 1;
         _roomCapacityNumeric.Value = 1;
@@ -370,10 +239,12 @@ public sealed partial class MainForm
 
     private void ClearGuestForm()
     {
+        _guestEditId=0; _guestsGrid.ClearSelection(); _guestsGrid.CurrentCell=null; _guestActiveCheck.Checked=true;
+        _guestBirthDatePicker.Checked=false;
         _guestLastNameText.Clear();
         _guestFirstNameText.Clear();
         _guestMiddleNameText.Clear();
-        _guestBirthDatePicker.Value = DateTime.Today.AddYears(-25);
+        _guestBirthDatePicker.Value = Database.Today.AddYears(-25);
         _guestPassportText.Clear();
         _guestPhoneText.Clear();
         _guestEmailText.Clear();
@@ -393,8 +264,14 @@ public sealed partial class MainForm
             return;
         }
 
-        _selectedRoomPhoto = File.ReadAllBytes(dialog.FileName);
-        ShowRoomPhoto();
+        RunSafely(() => {
+            if(new FileInfo(dialog.FileName).Length>10*1024*1024)throw new InvalidOperationException("Изображение должно быть не больше 10 МБ.");
+            using var source=Image.FromFile(dialog.FileName);
+            if((long)source.Width*source.Height>40000000)throw new InvalidOperationException("Изображение слишком большое.");
+            using var scaled=new Bitmap(source,new Size(Math.Max(1,source.Width* Math.Min(1600,source.Width)/source.Width),Math.Max(1,source.Height*Math.Min(1600,source.Width)/source.Width)));
+            using var stream=new MemoryStream(); scaled.Save(stream,System.Drawing.Imaging.ImageFormat.Png);
+            _selectedRoomPhoto=stream.ToArray(); ShowRoomPhoto();
+        });
     }
 
     private void ShowRoomPhoto()

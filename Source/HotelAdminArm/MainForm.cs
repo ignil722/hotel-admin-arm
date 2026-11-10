@@ -1,6 +1,7 @@
-using System.Data;
+﻿using System.Data;
 using System.Globalization;
 using HotelAdminArm.Data;
+using HotelAdminArm.Domain;
 
 namespace HotelAdminArm;
 
@@ -8,13 +9,18 @@ public sealed partial class MainForm : Form
 {
     private const string DateFormat = "yyyy-MM-dd";
     private bool _loading;
+    internal Action<Exception>? ErrorHandler {get;set;}
+    private int _roomEditId, _guestEditId, _bookingEditId, _serviceEditId;
+    private CheckBox _roomActiveCheck = null!, _guestActiveCheck = null!;
+    private Label _clockLabel = null!;
+    private readonly System.Windows.Forms.Timer _refreshTimer = new() { Interval = 30000 };
+    private DateTime _lastDay = Database.Today;
     private byte[]? _selectedRoomPhoto;
 
     private readonly TabControl _tabs = new();
     private readonly StatusStrip _statusStrip = new();
     private readonly ToolStripStatusLabel _databaseStatus = new();
 
-    private Label _statsLabel = null!;
     private DataGridView _auditGrid = null!;
 
     private DataGridView _roomsGrid = null!;
@@ -39,14 +45,14 @@ public sealed partial class MainForm : Form
 
     private DataGridView _availableRoomsGrid = null!;
     private DataGridView _bookingsGrid = null!;
-    private DateTimePicker _availableFromPicker = null!;
-    private DateTimePicker _availableToPicker = null!;
+    private OperationalDatePicker _availableFromPicker = null!;
+    private OperationalDatePicker _availableToPicker = null!;
     private ComboBox _availableTypeCombo = null!;
     private NumericUpDown _availableCapacityNumeric = null!;
     private ComboBox _bookingGuestCombo = null!;
     private ComboBox _bookingRoomCombo = null!;
-    private DateTimePicker _bookingFromPicker = null!;
-    private DateTimePicker _bookingToPicker = null!;
+    private OperationalDatePicker _bookingFromPicker = null!;
+    private OperationalDatePicker _bookingToPicker = null!;
     private ComboBox _bookingStatusCombo = null!;
     private TextBox _bookingCommentText = null!;
 
@@ -56,7 +62,7 @@ public sealed partial class MainForm : Form
     private ComboBox _stayGuestCombo = null!;
     private ComboBox _stayRoomCombo = null!;
     private DateTimePicker _stayCheckInPicker = null!;
-    private DateTimePicker _stayPlannedOutPicker = null!;
+    private OperationalDatePicker _stayPlannedOutPicker = null!;
     private TextBox _stayNotesText = null!;
 
     private DataGridView _servicesGrid = null!;
@@ -67,11 +73,12 @@ public sealed partial class MainForm : Form
     private ComboBox _orderStayCombo = null!;
     private ComboBox _orderServiceCombo = null!;
     private NumericUpDown _orderQuantityNumeric = null!;
+    private DateTimePicker _orderDatePicker = null!;
+    private ComboBox _serviceMealCombo = null!, _serviceRuleCombo = null!, _orderGuestCombo = null!;
+    private Label _orderRuleLabel = null!;
 
     private DataGridView _paymentStaysGrid = null!;
     private DataGridView _paymentsGrid = null!;
-    private ComboBox _paymentPayerCombo = null!;
-    private ComboBox _paymentMethodCombo = null!;
     private Label _paymentTotalLabel = null!;
 
     public MainForm()
@@ -79,7 +86,8 @@ public sealed partial class MainForm : Form
         Text = $"{HotelBranding.SystemTitle} - {HotelBranding.HotelName}";
         StartPosition = FormStartPosition.CenterScreen;
         WindowState = FormWindowState.Maximized;
-        MinimumSize = new Size(1180, 760);
+        MinimumSize = new Size(1000, 700);
+        AutoScaleMode = AutoScaleMode.Dpi;
         Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point);
         BackColor = HotelBranding.Background;
 
@@ -93,12 +101,34 @@ public sealed partial class MainForm : Form
         }
 
         BuildInterface();
+        Shown+=(_,_)=>FitToWorkingArea();
+        DpiChanged+=(_,_)=>BeginInvoke(new Action(FitToWorkingArea));
+        _refreshTimer.Tick += (_, _) => {
+            _clockLabel.Text = DateTime.Now.ToString("dd.MM.yyyy HH:mm");
+            if (_lastDay != Database.Today) { _lastDay=Database.Today; RefreshAll(false); }
+            else if (!_loading) RunSafely(UpdateOrderRule);
+        };
+        _refreshTimer.Start();
+        // Rebinding every lookup on activation closes an open native dropdown and
+        // steals input focus. Operations refresh their own data; external edits can
+        // be loaded with «Обновить всё». Only a day rollover needs an automatic reload.
+        Activated += (_, _) => { if (!_loading && _roomsGrid.DataSource is not null && _lastDay!=Database.Today) BeginInvoke(new Action(() => { if(!IsDisposed && !_loading){_lastDay=Database.Today;RefreshAll(false);} })); };
+        FormClosed += (_, _) => { _refreshTimer.Dispose(); _roomPhotoBox.Image?.Dispose(); };
 
         Load += (_, _) =>
         {
             RefreshAll();
-            FindAvailableRooms();
+            ClearRoomForm(); ClearGuestForm(); ClearBookingForm(); ClearServiceForm();
         };
+    }
+
+    private void FitToWorkingArea()
+    {
+        if(IsDisposed)return;
+        var area=Screen.FromControl(this).WorkingArea;
+        MinimumSize=new Size(Math.Min(1000,area.Width),Math.Min(700,area.Height));
+        if(WindowState==FormWindowState.Normal)
+            Size=new Size(Math.Min(Width,area.Width),Math.Min(Height,area.Height));
     }
 
     private void BuildInterface()
@@ -110,15 +140,18 @@ public sealed partial class MainForm : Form
             RowCount = 2,
             BackColor = HotelBranding.Background
         };
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 98));
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 70));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
 
         _tabs.Dock = DockStyle.Fill;
         _tabs.DrawMode = TabDrawMode.OwnerDrawFixed;
-        _tabs.ItemSize = new Size(180, 34);
+        _tabs.ItemSize = new Size(145, 34);
+        _tabs.Multiline = false;
         _tabs.SizeMode = TabSizeMode.Fixed;
         _tabs.Padding = new Point(14, 4);
         _tabs.DrawItem += DrawTab;
+        _tabs.SelectedIndexChanged+=(_,_)=>{if(!_loading && _calendarGrid is not null && _tabs.SelectedTab?.Text=="Календарь")RunSafely(RefreshCalendar);};
         _tabs.TabPages.Add(BuildDashboardTab());
         _tabs.TabPages.Add(BuildRoomsTab());
         _tabs.TabPages.Add(BuildGuestsTab());
@@ -126,6 +159,11 @@ public sealed partial class MainForm : Form
         _tabs.TabPages.Add(BuildStaysTab());
         _tabs.TabPages.Add(BuildServicesTab());
         _tabs.TabPages.Add(BuildPaymentsTab());
+        _tabs.TabPages.Add(BuildCalendarTab());
+        _tabs.TabPages.Add(BuildOperationsTab());
+        AddSectionHelp();
+        _tabs.FontChanged+=(_,_)=>UpdateTabMetrics();
+        UpdateTabMetrics();
 
         _databaseStatus.Text = $"{HotelBranding.HotelName} | База данных: {Database.DatabasePath}";
         _databaseStatus.ForeColor = HotelBranding.MutedInk;
@@ -138,6 +176,31 @@ public sealed partial class MainForm : Form
 
         Controls.Add(root);
         Controls.Add(_statusStrip);
+        ConstrainSingleColumns(root);
+    }
+
+    private static void ConstrainSingleColumns(Control parent)
+    {
+        if(parent is TableLayoutPanel table && table.ColumnCount<=1 && table.ColumnStyles.Count==0)
+            table.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        if(parent is TableLayoutPanel editor && Equals(editor.Tag,"Editor"))
+        {
+            var last=editor.RowCount-1;
+            var buttons=editor.Controls.Cast<Control>().OfType<WrappingButtonPanel>().FirstOrDefault(c=>editor.GetRow(c)==last);
+            if(buttons is not null)
+            {
+                foreach(var blank in editor.Controls.Cast<Control>().OfType<Label>().Where(c=>editor.GetRow(c)==last && c.Text.Length==0).ToArray()){editor.Controls.Remove(blank);blank.Dispose();}
+                editor.SetCellPosition(buttons,new TableLayoutPanelCellPosition(0,last));editor.SetColumnSpan(buttons,2);
+            }
+        }
+        foreach(Control child in parent.Controls)ConstrainSingleColumns(child);
+    }
+
+    private void UpdateTabMetrics()
+    {
+        if(_tabs.TabCount==0)return;
+        var width=_tabs.TabPages.Cast<TabPage>().Max(p=>TextRenderer.MeasureText(p.Text,_tabs.Font).Width)+24;
+        _tabs.ItemSize=new Size(Math.Max(145,width),Math.Max(34,_tabs.Font.Height+14));
     }
 
     private TabPage BuildDashboardTab()
@@ -151,61 +214,26 @@ public sealed partial class MainForm : Form
             RowCount = 3,
             ColumnCount = 1
         };
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 174));
+        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
 
-        var hero = new GradientHeaderPanel
+        var cards=new WrappingButtonPanel{Dock=DockStyle.Fill,AutoSize=true,AutoSizeMode=AutoSizeMode.GrowAndShrink,WrapContents=true};
+        var names=new[]{"Номера","Гости","Активные брони","Проживают","Архив выездов","Всего записей"};
+        for(var i=0;i<names.Length;i++)
         {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(26, 18, 26, 18)
-        };
-        var logo = new PictureBox
-        {
-            Image = HotelBranding.CreateLogoBitmap(104),
-            BackColor = Color.Transparent,
-            SizeMode = PictureBoxSizeMode.Zoom,
-            Size = new Size(104, 104),
-            Location = new Point(24, 30)
-        };
-        var title = new Label
-        {
-            Text = HotelBranding.HotelName,
-            BackColor = Color.Transparent,
-            ForeColor = Color.White,
-            Font = new Font("Segoe UI Semibold", 26F, FontStyle.Bold),
-            AutoSize = true,
-            Location = new Point(150, 30)
-        };
-        var subtitle = new Label
-        {
-            Text = HotelBranding.Tagline,
-            BackColor = Color.Transparent,
-            ForeColor = Color.FromArgb(231, 238, 232),
-            Font = new Font("Segoe UI", 12F, FontStyle.Regular),
-            AutoSize = true,
-            Location = new Point(154, 78)
-        };
-        _statsLabel = new Label
-        {
-            Anchor = AnchorStyles.Top | AnchorStyles.Right,
-            BackColor = Color.Transparent,
-            ForeColor = Color.White,
-            TextAlign = ContentAlignment.MiddleRight,
-            Font = new Font(Font.FontFamily, 12F, FontStyle.Bold),
-            Size = new Size(560, 112),
-            Location = new Point(560, 30)
-        };
-        hero.Resize += (_, _) => _statsLabel.Location = new Point(Math.Max(420, hero.Width - 590), 34);
-        hero.Controls.Add(logo);
-        hero.Controls.Add(title);
-        hero.Controls.Add(subtitle);
-        hero.Controls.Add(_statsLabel);
+            var card=new TableLayoutPanel{Width=180,Height=64,MinimumSize=new Size(170,64),ColumnCount=1,RowCount=2,BackColor=HotelBranding.Surface,Padding=new Padding(8),Margin=new Padding(0,0,8,8)};
+            card.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            card.RowStyles.Add(new RowStyle(SizeType.Percent,45));card.RowStyles.Add(new RowStyle(SizeType.Percent,55));
+            card.Controls.Add(new Label{Text=names[i],Dock=DockStyle.Fill,ForeColor=HotelBranding.MutedInk},0,0);
+            _statValues[i]=new Label{Text="0",Dock=DockStyle.Fill,Font=new Font(Font.FontFamily,16,FontStyle.Bold),ForeColor=HotelBranding.PrimaryDark};
+            card.Controls.Add(_statValues[i],0,1);cards.Controls.Add(card);
+        }
 
         var header = CreateSectionLabel("Последние действия в базе данных");
         _auditGrid = CreateGrid();
 
-        layout.Controls.Add(hero, 0, 0);
+        layout.Controls.Add(cards, 0, 0);
         layout.Controls.Add(header, 0, 1);
         layout.Controls.Add(_auditGrid, 0, 2);
         page.Controls.Add(layout);
@@ -220,49 +248,15 @@ public sealed partial class MainForm : Form
             Padding = new Padding(22, 12, 22, 12)
         };
 
-        var logo = new PictureBox
-        {
-            Image = HotelBranding.CreateLogoBitmap(72),
-            BackColor = Color.Transparent,
-            SizeMode = PictureBoxSizeMode.Zoom,
-            Size = new Size(72, 72),
-            Location = new Point(24, 13)
-        };
-        var title = new Label
-        {
-            Text = $"{HotelBranding.HotelName}  |  {HotelBranding.SystemTitle}",
-            BackColor = Color.Transparent,
-            ForeColor = Color.White,
-            Font = new Font("Segoe UI Semibold", 21F, FontStyle.Bold),
-            AutoSize = true,
-            Location = new Point(114, 18)
-        };
-        var subtitle = new Label
-        {
-            Text = "Управление гостиницей: номера, гости, бронирование, заселение, услуги, оплата и архив",
-            BackColor = Color.Transparent,
-            ForeColor = Color.FromArgb(230, 238, 232),
-            Font = new Font("Segoe UI", 11F, FontStyle.Regular),
-            AutoSize = true,
-            Location = new Point(118, 58)
-        };
-        var today = new Label
-        {
-            Anchor = AnchorStyles.Top | AnchorStyles.Right,
-            Text = DateTime.Now.ToString("dd.MM.yyyy HH:mm"),
-            BackColor = Color.Transparent,
-            ForeColor = Color.White,
-            Font = new Font("Segoe UI", 12F, FontStyle.Bold),
-            TextAlign = ContentAlignment.MiddleRight,
-            Size = new Size(230, 30),
-            Location = new Point(Width - 275, 34)
-        };
-        header.Resize += (_, _) => today.Location = new Point(header.Width - 260, 34);
-
-        header.Controls.Add(logo);
-        header.Controls.Add(title);
-        header.Controls.Add(subtitle);
-        header.Controls.Add(today);
+        var layout=new TableLayoutPanel {Dock=DockStyle.Fill,BackColor=Color.Transparent,ColumnCount=3,RowCount=1};
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,82));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute,185));
+        layout.Controls.Add(new PictureBox {Image=HotelBranding.CreateLogoBitmap(72),Dock=DockStyle.Fill,SizeMode=PictureBoxSizeMode.Zoom,BackColor=Color.Transparent},0,0);
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        layout.Controls.Add(new Label {Text=$"{HotelBranding.HotelName} | {HotelBranding.SystemTitle}",Dock=DockStyle.Fill,BackColor=Color.Transparent,ForeColor=Color.White,Font=new Font("Segoe UI",14F,FontStyle.Bold),TextAlign=ContentAlignment.MiddleLeft,AutoEllipsis=true},1,0);
+        _clockLabel=new Label {Text=DateTime.Now.ToString("dd.MM.yyyy HH:mm"),Dock=DockStyle.Fill,BackColor=Color.Transparent,ForeColor=Color.White,Font=new Font("Segoe UI",10F,FontStyle.Bold),TextAlign=ContentAlignment.MiddleRight};
+        layout.Controls.Add(_clockLabel,2,0);header.Controls.Add(layout);
         return header;
     }
 
@@ -284,23 +278,32 @@ public sealed partial class MainForm : Form
         e.Graphics.DrawString(_tabs.TabPages[e.Index].Text, Font, textBrush, bounds, format);
     }
 
-    private void RefreshAll()
+    private void RefreshAll(bool reloadEditors = true)
     {
         RunSafely(() =>
         {
             _loading = true;
-            RefreshLookups();
-            RefreshRooms();
-            RefreshGuests();
-            RefreshBookings();
-            RefreshStays();
-            RefreshServices();
-            RefreshOrders();
-            RefreshPayments();
-            RefreshDashboard();
+            try {
+                SynchronizeOperationalDates();
+                RefreshLookups(); RefreshRooms(); RefreshGuests(); RefreshBookings(); RefreshStays();
+                RefreshServices(); RefreshOrders(); RefreshPayments(); RefreshDashboard(); RefreshExtras();
+                if (_availableFromPicker.Value.Date >= Database.Today && _availableToPicker.Value.Date > _availableFromPicker.Value.Date)
+                    SetGrid(_availableRoomsGrid, HotelService.Available(_availableFromPicker.Value,_availableToPicker.Value,ComboId(_availableTypeCombo),(int)_availableCapacityNumeric.Value));
+            } finally { _loading = false; }
+            if(_roomEditId>0 && SelectedId(_roomsGrid)==0)ClearRoomForm();
+            if(_guestEditId>0 && SelectedId(_guestsGrid)==0)ClearGuestForm();
+            if(_bookingEditId>0 && SelectedId(_bookingsGrid)==0)ClearBookingForm();
+            if(_serviceEditId>0 && SelectedId(_servicesGrid)==0)ClearServiceForm();
+            if (reloadEditors) {
+                if (_roomEditId>0 && SelectedId(_roomsGrid)==_roomEditId) LoadSelectedRoom();
+                if (_guestEditId>0 && SelectedId(_guestsGrid)==_guestEditId) LoadSelectedGuest();
+                if (_bookingEditId>0 && SelectedId(_bookingsGrid)==_bookingEditId) LoadSelectedBooking();
+                if (_serviceEditId>0 && SelectedId(_servicesGrid)==_serviceEditId) LoadSelectedService();
+            }
+            CalculateSelectedPayment();
+            RefreshOrderGuests();
+            UpdateOrderRule();
         });
-
-        _loading = false;
     }
 
     private void RefreshDashboard()
@@ -322,10 +325,8 @@ public sealed partial class MainForm : Form
                 (SELECT COUNT(*) FROM Payments)
             """);
 
-        _statsLabel.Text =
-            $"Номеров: {rooms}    Гостей: {guests}\n" +
-            $"Активных броней: {bookings}    Проживают: {activeStays}\n" +
-            $"Архив выездов: {archive}    Всего записей: {totalRecords}";
+        var counts=new[]{rooms,guests,bookings,activeStays,archive,totalRecords};
+        for(var i=0;i<counts.Length;i++)_statValues[i].Text=counts[i].ToString();
 
         SetGrid(
             _auditGrid,
@@ -352,9 +353,9 @@ public sealed partial class MainForm : Form
             )
             ORDER BY SortOrder, Name;
             """));
+        if(_availableTypeCombo.SelectedIndex<0)_availableTypeCombo.SelectedValue=0;
         BindCombo(_bookingGuestCombo, GuestsLookup());
         BindCombo(_stayGuestCombo, GuestsLookup());
-        BindCombo(_paymentPayerCombo, GuestsLookup());
         BindCombo(_bookingRoomCombo, RoomsLookup());
         BindCombo(_stayRoomCombo, RoomsLookup());
         BindCombo(_orderStayCombo, ActiveStaysLookup());
@@ -366,21 +367,14 @@ public sealed partial class MainForm : Form
         return Database.Query(
             """
             SELECT Id, LastName || ' ' || FirstName || ' ' || IFNULL(MiddleName, '') AS Name
-            FROM Guests
+            FROM Guests WHERE IsActive=1
             ORDER BY LastName, FirstName;
             """);
     }
 
     private static DataTable RoomsLookup()
     {
-        return Database.Query(
-            """
-            SELECT r.Id, r.Number || ' - ' || rt.Name || ', ' || r.DailyPrice || ' руб./сут.' AS Name
-            FROM Rooms r
-            JOIN RoomTypes rt ON rt.Id = r.RoomTypeId
-            WHERE r.Status <> 'Ремонт'
-            ORDER BY r.Number;
-            """);
+        return Database.Query("SELECT Id,Number || CASE WHEN IsActive=0 THEN ' (неактивен)' WHEN UnderMaintenance=1 THEN ' (ремонт)' ELSE '' END AS Name FROM Rooms ORDER BY Number");
     }
 
     private static DataTable ActiveStaysLookup()
@@ -397,6 +391,29 @@ public sealed partial class MainForm : Form
             """);
     }
 
+    private void AddSectionHelp()
+    {
+        var descriptions=new[]{
+            "Сводка: показатели гостиницы и последние действия администратора.",
+            "Номера: тип, вместимость, тариф за весь номер в сутки, фотографии и доступность.",
+            "Гости: регистрационные данные и поиск. Отключение сохраняет историю гостя.",
+            "Бронирование: найдите свободный номер на выбранные даты и оформите бронь.",
+            "Заселение и архив: заезд, проживающие, продление, переселение и история выездов.",
+            "Услуги: каталог и заказы. Питание — одна порция каждого вида на гостя в день.",
+            "Оплата: выберите одно или несколько проживаний, проверьте счёт и подтвердите выезд.",
+            "Календарь: доступность номеров на 30 дней. Двойной щелчок по свободной дате — новая бронь.",
+            "Контроль и копии: сегодняшние операции, проблемы истории, резервное копирование и восстановление."};
+        for(var i=0;i<_tabs.TabCount;i++)
+        {
+            var page=_tabs.TabPages[i];var content=page.Controls[0];page.Controls.Remove(content);
+            var shell=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2};
+            shell.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));
+            shell.RowStyles.Add(new RowStyle(SizeType.AutoSize));shell.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+            shell.Controls.Add(new Label{Text=descriptions[i],AutoSize=true,Dock=DockStyle.Fill,Padding=new Padding(4,3,4,7),ForeColor=HotelBranding.MutedInk},0,0);
+            shell.Controls.Add(content,0,1);page.Controls.Add(shell);
+        }
+    }
+
     private static TabPage CreateTabPage(string title)
     {
         return new TabPage(title)
@@ -406,15 +423,16 @@ public sealed partial class MainForm : Form
         };
     }
 
-    private static DataGridView CreateGrid(bool multiSelect = false)
+    private DataGridView CreateGrid(bool multiSelect = false)
     {
         var grid = new DataGridView
         {
             Dock = DockStyle.Fill,
             ReadOnly = true,
+            AutoGenerateColumns = false,
             AllowUserToAddRows = false,
             AllowUserToDeleteRows = false,
-            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.AllCells,
             BackgroundColor = HotelBranding.Surface,
             BorderStyle = BorderStyle.None,
             CellBorderStyle = DataGridViewCellBorderStyle.SingleHorizontal,
@@ -426,6 +444,8 @@ public sealed partial class MainForm : Form
             RowTemplate = { Height = 34 }
         };
         StyleGrid(grid);
+        grid.FontChanged+=(_,_)=>FitGridColumns(grid);
+        grid.DataError+=(_,e)=>{e.ThrowException=false;RunSafely(()=>throw new InvalidOperationException("Не удалось показать значение в таблице. Обновите список.",e.Exception));};
         return grid;
     }
 
@@ -448,7 +468,7 @@ public sealed partial class MainForm : Form
         {
             Text = text,
             AutoSize = true,
-            MinimumSize = new Size(120, 36),
+            MinimumSize = new Size(96, 36),
             Height = 36,
             Margin = new Padding(4),
             FlatStyle = FlatStyle.Flat,
@@ -491,6 +511,7 @@ public sealed partial class MainForm : Form
         {
             Dock = DockStyle.Fill,
             AutoScroll = true,
+            Tag = "Editor",
             Padding = new Padding(10),
             BackColor = HotelBranding.Surface,
             ColumnCount = 2,
@@ -498,6 +519,10 @@ public sealed partial class MainForm : Form
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        layout.SizeChanged+=(_,_)=>{
+            var target=Math.Min(150*layout.Font.Size/10f,Math.Max(90,layout.ClientSize.Width*0.36f));
+            if(Math.Abs(layout.ColumnStyles[0].Width-target)>1)layout.ColumnStyles[0].Width=target;
+        };
 
         for (var i = 0; i < rows; i++)
         {
@@ -555,11 +580,12 @@ public sealed partial class MainForm : Form
 
     private static FlowLayoutPanel ButtonsPanel(params Control[] buttons)
     {
-        var panel = new FlowLayoutPanel
+        var panel = new WrappingButtonPanel
         {
             FlowDirection = FlowDirection.LeftToRight,
             Dock = DockStyle.Fill,
             AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             WrapContents = true
         };
 
@@ -619,29 +645,48 @@ public sealed partial class MainForm : Form
         return new DateTimePicker
         {
             Format = DateTimePickerFormat.Short,
-            Value = value ?? DateTime.Today,
+            Value = value ?? Database.Today,
             Width = 150
         };
     }
 
+    private void SynchronizeOperationalDates()
+    {
+        foreach (var picker in new[] { _availableFromPicker, _availableToPicker,
+            _bookingFromPicker, _bookingToPicker, _stayPlannedOutPicker, _calendarFrom })
+            picker.SynchronizeDateBounds();
+        _clockLabel.Text = DateTime.Now.ToString("dd.MM.yyyy HH:mm");
+    }
+
     private static void SetGrid(DataGridView grid, DataTable table)
     {
-        grid.DataSource = table;
-        StyleGrid(grid);
-
-        if (grid.Columns.Contains("Id"))
-        {
-            grid.Columns["Id"]!.Visible = false;
+        var current=SelectedId(grid);
+        var selected=grid.SelectedRows.Cast<DataGridViewRow>().Where(r=>r.Cells["Id"].Value is not null).Select(r=>Convert.ToInt32(r.Cells["Id"].Value)).ToHashSet();
+        if(grid.Columns.Count!=table.Columns.Count || table.Columns.Cast<DataColumn>().Any(c=>!grid.Columns.Contains(c.ColumnName))) {
+            grid.DataSource=null;grid.Columns.Clear();grid.AutoGenerateColumns=false;
+            foreach(DataColumn column in table.Columns)grid.Columns.Add(new DataGridViewTextBoxColumn {Name=column.ColumnName,HeaderText=column.ColumnName,DataPropertyName=column.ColumnName,Visible=column.ColumnName!="Id"});
         }
+        grid.DataSource=table;
+        FitGridColumns(grid);
+        if(grid.Columns.Contains("Id"))grid.Columns["Id"]!.Visible=false;
+        grid.ClearSelection(); grid.CurrentCell=null;
+        foreach(DataGridViewRow row in grid.Rows) {
+            if(row.Cells["Id"].Value is null) continue;
+            var id=Convert.ToInt32(row.Cells["Id"].Value);
+            if(id==current) grid.CurrentCell=row.Cells.Cast<DataGridViewCell>().First(cell=>cell.Visible);
+        }
+        grid.ClearSelection();
+        foreach(DataGridViewRow row in grid.Rows)if(selected.Contains(Convert.ToInt32(row.Cells["Id"].Value)))row.Selected=true;
     }
 
     private static void StyleGrid(DataGridView grid)
     {
         grid.ColumnHeadersDefaultCellStyle.BackColor = HotelBranding.GridHeader;
         grid.ColumnHeadersDefaultCellStyle.ForeColor = Color.White;
-        grid.ColumnHeadersDefaultCellStyle.Font = new Font("Segoe UI Semibold", 9.5F, FontStyle.Bold);
+        grid.ColumnHeadersDefaultCellStyle.Font = SystemFonts.MessageBoxFont;
         grid.ColumnHeadersDefaultCellStyle.Alignment = DataGridViewContentAlignment.MiddleLeft;
         grid.ColumnHeadersHeight = 40;
+        grid.ColumnHeadersHeightSizeMode=DataGridViewColumnHeadersHeightSizeMode.AutoSize;
         grid.DefaultCellStyle.BackColor = HotelBranding.Surface;
         grid.DefaultCellStyle.ForeColor = HotelBranding.Ink;
         grid.DefaultCellStyle.SelectionBackColor = HotelBranding.GridSelection;
@@ -665,9 +710,10 @@ public sealed partial class MainForm : Form
             }
             catch
             {
-                combo.SelectedIndex = combo.Items.Count > 0 ? 0 : -1;
+                combo.SelectedIndex = -1;
             }
         }
+        else combo.SelectedIndex=-1;
     }
 
     private static int ComboId(ComboBox combo)
@@ -682,7 +728,7 @@ public sealed partial class MainForm : Form
 
     private static int SelectedId(DataGridView grid)
     {
-        if (grid.CurrentRow?.Cells["Id"].Value is null)
+        if (grid.CurrentRow is null || !grid.Columns.Contains("Id") || grid.CurrentRow.Cells["Id"].Value is null)
         {
             return 0;
         }
@@ -714,7 +760,7 @@ public sealed partial class MainForm : Form
     {
         if (value is null || value == DBNull.Value)
         {
-            return DateTime.Today;
+            return Database.Today;
         }
 
         return DateTime.Parse(Convert.ToString(value, CultureInfo.InvariantCulture)!, CultureInfo.InvariantCulture);
@@ -728,8 +774,9 @@ public sealed partial class MainForm : Form
         }
         catch (Exception ex)
         {
+            if(ErrorHandler is not null){ErrorHandler(ex);return;}
             MessageBox.Show(
-                ex.Message,
+                FriendlyError(ex),
                 HotelBranding.SystemTitle,
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Error);

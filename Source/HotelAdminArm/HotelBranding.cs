@@ -86,10 +86,15 @@ internal static class HotelBranding
         return bitmap;
     }
 
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern bool DestroyIcon(IntPtr handle);
+
     public static Icon CreateAppIcon()
     {
         using var bitmap = CreateLogoBitmap(64);
-        return Icon.FromHandle(bitmap.GetHicon());
+        var handle=bitmap.GetHicon();
+        try { using var icon=Icon.FromHandle(handle); return (Icon)icon.Clone(); }
+        finally { DestroyIcon(handle); }
     }
 
     public static byte[] CreateRoomImage(string roomNumber, int roomTypeId)
@@ -156,7 +161,8 @@ internal static class HotelBranding
         }
 
         DrawRoundedRectangle(graphics, accent, new Rectangle(470, 52, 210, 155), 18);
-        DrawRoundedRectangle(graphics, new SolidBrush(Color.FromArgb(232, 245, 241)), new Rectangle(486, 68, 178, 123), 12);
+        using var windowBrush=new SolidBrush(Color.FromArgb(232, 245, 241));
+        DrawRoundedRectangle(graphics, windowBrush, new Rectangle(486, 68, 178, 123), 12);
         graphics.DrawLine(windowPen, 575, 70, 575, 190);
         graphics.DrawLine(windowPen, 488, 130, 663, 130);
 
@@ -168,8 +174,10 @@ internal static class HotelBranding
         DrawRoundedRectangle(graphics, throwBrush, new Rectangle(132, 266, 365, 30), 12);
 
         DrawRoundedRectangle(graphics, shadow, new Rectangle(566, 303, 86, 20), 12);
-        DrawRoundedRectangle(graphics, new SolidBrush(Color.FromArgb(116, 87, 65)), new Rectangle(574, 226, 68, 86), 8);
-        DrawRoundedRectangle(graphics, new SolidBrush(Color.FromArgb(246, 214, 146)), new Rectangle(585, 177, 45, 48), 18);
+        using var lampStand=new SolidBrush(Color.FromArgb(116, 87, 65));
+        DrawRoundedRectangle(graphics, lampStand, new Rectangle(574, 226, 68, 86), 8);
+        using var lampShade=new SolidBrush(Color.FromArgb(246, 214, 146));
+        DrawRoundedRectangle(graphics, lampShade, new Rectangle(585, 177, 45, 48), 18);
         graphics.DrawLine(new Pen(Color.FromArgb(91, 72, 58), 4), 607, 226, 607, 252);
 
         graphics.DrawLine(goldPen, 70, 76, 70, 164);

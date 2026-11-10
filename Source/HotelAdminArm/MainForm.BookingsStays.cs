@@ -1,5 +1,6 @@
 using System.Data;
 using HotelAdminArm.Data;
+using HotelAdminArm.Domain;
 
 namespace HotelAdminArm;
 
@@ -8,98 +9,60 @@ public sealed partial class MainForm
     private TabPage BuildBookingsTab()
     {
         var page = CreateTabPage("Бронирование");
-        var layout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 2
-        };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 52));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50));
-
-        var searchPanel = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            Padding = new Padding(8),
-            ColumnCount = 2,
-            RowCount = 6
-        };
-        searchPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150));
-        searchPanel.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-
-        _availableFromPicker = DatePicker(DateTime.Today);
-        _availableToPicker = DatePicker(DateTime.Today.AddDays(1));
+        _availableFromPicker = new OperationalDatePicker(Database.Today);
+        _availableToPicker = new OperationalDatePicker(Database.Today.AddDays(1), minimumDays: 1);
         _availableTypeCombo = Combo();
         _availableCapacityNumeric = CountNumeric(10);
         var findButton = CreateButton("Найти свободные номера");
         findButton.Click += (_, _) => FindAvailableRooms();
 
-        AddField(searchPanel, "Дата заезда", _availableFromPicker, 0);
-        AddField(searchPanel, "Дата выезда", _availableToPicker, 1);
-        AddField(searchPanel, "Тип", _availableTypeCombo, 2);
-        AddField(searchPanel, "Минимум мест", _availableCapacityNumeric, 3);
-        searchPanel.Controls.Add(new Label(), 0, 4);
-        searchPanel.Controls.Add(findButton, 1, 4);
+        findButton.Margin=new Padding(4,24,4,4);
+        var searchPanel=ButtonsPanel(FilterBox("Дата заезда",_availableFromPicker),FilterBox("Дата выезда",_availableToPicker),FilterBox("Тип",_availableTypeCombo,200),FilterBox("Минимум мест",_availableCapacityNumeric,130),findButton);
 
         _availableRoomsGrid = CreateGrid();
         _availableRoomsGrid.DoubleClick += (_, _) => UseAvailableRoomForBooking();
 
         _bookingsGrid = CreateGrid();
-        _bookingsGrid.SelectionChanged += (_, _) => LoadSelectedBooking();
+        _bookingsGrid.CurrentCellChanged += (_, _) =>
+        {
+            // Windows selects the first row when a hidden tab becomes visible.
+            // Only a user's selection should populate the new-booking editor.
+            if (_bookingsGrid.ContainsFocus || SelectedId(_bookingsGrid)==0)
+                RunSafely(LoadSelectedBooking);
+        };
+        _bookingsGrid.CellClick += (_, e) => { if(e.RowIndex>=0)RunSafely(LoadSelectedBooking); };
 
-        var bookingEditor = CreateBookingEditor();
-        layout.Controls.Add(searchPanel, 0, 0);
-        layout.Controls.Add(_availableRoomsGrid, 0, 1);
-        layout.Controls.Add(_bookingsGrid, 1, 0);
-        layout.Controls.Add(bookingEditor, 1, 1);
-
-        page.Controls.Add(layout);
+        // Compact filters use their preferred height; results take the remaining space.
+        searchPanel.Dock=DockStyle.Top;searchPanel.AutoSize=true;
+        var results=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=2};
+        results.ColumnStyles.Add(new ColumnStyle(SizeType.Percent,100));results.RowStyles.Add(new RowStyle(SizeType.AutoSize));results.RowStyles.Add(new RowStyle(SizeType.Percent,100));
+        results.Controls.Add(searchPanel,0,0);results.Controls.Add(_availableRoomsGrid,0,1);
+        _bookingSections=Sections(("Брони",Workspace(SearchableGrid(_bookingsGrid),CreateBookingEditor())),("Поиск свободных номеров",results));
+        page.Controls.Add(_bookingSections);
         return page;
     }
 
     private TabPage BuildStaysTab()
     {
         var page = CreateTabPage("Заселение и архив");
-        var layout = new TableLayoutPanel
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 2,
-            RowCount = 2
-        };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 47));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 53));
-
         _pendingBookingsGrid = CreateGrid();
         _staysGrid = CreateGrid();
         _archiveGrid = CreateGrid();
 
-        var pendingPanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
-        pendingPanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-        pendingPanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         var checkInButton = CreateButton("Заселить выбранную бронь");
         checkInButton.Click += (_, _) => CheckInSelectedBooking();
-        pendingPanel.Controls.Add(ButtonsPanel(checkInButton), 0, 0);
-        pendingPanel.Controls.Add(_pendingBookingsGrid, 0, 1);
-
-        var stayEditor = CreateStayEditor();
-        var activePanel = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
-        activePanel.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        activePanel.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));
-        var checkOutButton = CreateButton("Оформить выезд выбранного проживания");
+        var checkOutButton = CreateButton("Выезд");
         checkOutButton.Click += (_, _) => CheckoutSingleStay();
-        activePanel.Controls.Add(_staysGrid, 0, 0);
-        activePanel.Controls.Add(ButtonsPanel(checkOutButton), 0, 1);
-
-        layout.Controls.Add(pendingPanel, 0, 0);
-        layout.Controls.Add(stayEditor, 1, 0);
-        layout.Controls.Add(activePanel, 0, 1);
-        layout.Controls.Add(_archiveGrid, 1, 1);
-
-        page.Controls.Add(layout);
+        var extend=CreateButton("Продлить"); extend.Click+=(_,_)=>ExtendSelectedStay();
+        var move=CreateButton("Переселить"); move.Click+=(_,_)=>MoveSelectedStay();
+        var occupants=CreateButton("Проживающие"); occupants.Click+=(_,_)=>ManageOccupants();
+        var card=CreateButton("Карточка");card.Click+=(_,_)=>RunSafely(()=>ShowText(HotelService.RegistrationCard(SelectedId(_staysGrid)),true,"Карточки регистрации гостей"));
+        var bill=CreateButton("Счёт из архива");bill.Click+=(_,_)=>RunSafely(()=>{var id=SelectedId(_archiveGrid);if(id==0)throw new InvalidOperationException("Выберите выезд.");ShowText(HotelService.ClosedBill(id),true);});
+        _staySections=Sections(
+            ("Проживания",Workspace(WithActions(SearchableGrid(_staysGrid),checkOutButton,extend,move,occupants,card),CreateStayEditor())),
+            ("Заезд по брони",WithActions(SearchableGrid(_pendingBookingsGrid),checkInButton)),
+            ("Архив",WithActions(SearchableGrid(_archiveGrid),bill)));
+        page.Controls.Add(_staySections);
         return page;
     }
 
@@ -107,10 +70,10 @@ public sealed partial class MainForm
     {
         _bookingGuestCombo = Combo();
         _bookingRoomCombo = Combo();
-        _bookingFromPicker = DatePicker(DateTime.Today);
-        _bookingToPicker = DatePicker(DateTime.Today.AddDays(1));
+        _bookingFromPicker = new OperationalDatePicker(allowEmpty: true);
+        _bookingToPicker = new OperationalDatePicker(allowEmpty: true);
         _bookingStatusCombo = Combo();
-        _bookingStatusCombo.DataSource = new[] { "Новое", "Подтверждено", "Заселен", "Отменено" };
+        _bookingStatusCombo.DataSource = new[] { "Новое", "Подтверждено" };
         _bookingCommentText = TextBoxMulti();
 
         var addButton = CreateButton("Создать бронь");
@@ -122,6 +85,8 @@ public sealed partial class MainForm
         var deleteButton = CreateButton("Удалить");
         deleteButton.Click += (_, _) => DeleteBooking();
 
+        var newButton=CreateButton("Новая бронь"); newButton.Click+=(_,_)=>ClearBookingForm();
+        var confirmButton=CreateButton("Подтвердить"); confirmButton.Click+=(_,_)=>RunSafely(()=>{_bookingStatusCombo.SelectedItem="Подтверждено";SaveBooking(true);});
         var editor = CreateEditorLayout(7);
         AddField(editor, "Гость", _bookingGuestCombo, 0);
         AddField(editor, "Номер", _bookingRoomCombo, 1);
@@ -130,7 +95,7 @@ public sealed partial class MainForm
         AddField(editor, "Статус", _bookingStatusCombo, 4);
         AddField(editor, "Комментарий", _bookingCommentText, 5);
         editor.Controls.Add(new Label(), 0, 6);
-        editor.Controls.Add(ButtonsPanel(addButton, updateButton, cancelButton, deleteButton), 1, 6);
+        editor.Controls.Add(ButtonsPanel(newButton,addButton,updateButton,confirmButton,cancelButton,deleteButton), 1, 6);
         return editor;
     }
 
@@ -138,8 +103,9 @@ public sealed partial class MainForm
     {
         _stayGuestCombo = Combo();
         _stayRoomCombo = Combo();
-        _stayCheckInPicker = DatePicker(DateTime.Today);
-        _stayPlannedOutPicker = DatePicker(DateTime.Today.AddDays(1));
+        _stayCheckInPicker = DatePicker(Database.Today);
+        _stayCheckInPicker.Enabled=false;
+        _stayPlannedOutPicker = new OperationalDatePicker(Database.Today.AddDays(1), minimumDays: 1);
         _stayNotesText = TextBoxMulti();
 
         var addButton = CreateButton("Заселить без брони");
@@ -158,298 +124,82 @@ public sealed partial class MainForm
 
     private void RefreshBookings()
     {
-        SetGrid(
-            _bookingsGrid,
-            Database.Query(
-                """
-                SELECT b.Id, g.LastName || ' ' || g.FirstName AS 'Гость',
-                       r.Number AS 'Номер', rt.Name AS 'Тип',
-                       b.DateFrom AS 'Заезд', b.DateTo AS 'Выезд',
-                       b.Status AS 'Статус', b.Comment AS 'Комментарий'
-                FROM Bookings b
-                JOIN Guests g ON g.Id = b.GuestId
-                JOIN Rooms r ON r.Id = b.RoomId
-                JOIN RoomTypes rt ON rt.Id = r.RoomTypeId
-                ORDER BY b.DateFrom DESC, b.Id DESC;
-                """));
-
-        SetGrid(
-            _pendingBookingsGrid,
-            Database.Query(
-                """
-                SELECT b.Id, g.LastName || ' ' || g.FirstName AS 'Гость',
-                       r.Number AS 'Номер', b.DateFrom AS 'Заезд',
-                       b.DateTo AS 'Выезд', b.Status AS 'Статус'
-                FROM Bookings b
-                JOIN Guests g ON g.Id = b.GuestId
-                JOIN Rooms r ON r.Id = b.RoomId
-                WHERE b.Status IN ('Новое', 'Подтверждено')
-                ORDER BY b.DateFrom;
-                """));
+        SetGrid(_bookingsGrid,Database.Query("""
+            SELECT b.Id,g.LastName||' '||g.FirstName AS 'Гость',r.Number AS 'Номер',b.DateFrom AS 'Заезд',b.DateTo AS 'Выезд',b.Status AS 'Статус',
+                b.RateKopecks/100.0 AS 'Тариф',CASE WHEN b.Status IN('Новое','Подтверждено') AND b.DateTo<=hotel_today() THEN 'Период истёк' ELSE '' END AS 'Внимание',b.Comment AS 'Комментарий'
+            FROM Bookings b JOIN Guests g ON g.Id=b.GuestId JOIN Rooms r ON r.Id=b.RoomId ORDER BY b.DateFrom DESC,b.Id DESC
+            """));
+        SetGrid(_pendingBookingsGrid,Database.Query("""
+            SELECT b.Id,g.LastName||' '||g.FirstName AS 'Гость',r.Number AS 'Номер',b.DateFrom AS 'Заезд',b.DateTo AS 'Выезд'
+            FROM Bookings b JOIN Guests g ON g.Id=b.GuestId JOIN Rooms r ON r.Id=b.RoomId
+            WHERE b.Status='Подтверждено' AND b.DateFrom<=hotel_today() AND b.DateTo>hotel_today() ORDER BY b.DateFrom
+            """));
     }
-
     private void RefreshStays()
     {
-        SetGrid(
-            _staysGrid,
-            Database.Query(
-                """
-                SELECT s.Id, g.LastName || ' ' || g.FirstName AS 'Гость',
-                       r.Number AS 'Номер', s.CheckInDate AS 'Заезд',
-                       s.PlannedCheckOutDate AS 'Плановый выезд',
-                       IFNULL(s.ActualCheckOutDate, '') AS 'Фактический выезд',
-                       s.Status AS 'Статус', s.Notes AS 'Примечание'
-                FROM Stays s
-                JOIN Guests g ON g.Id = s.GuestId
-                JOIN Rooms r ON r.Id = s.RoomId
-                ORDER BY s.Status, s.CheckInDate DESC;
-                """));
-
-        SetGrid(
-            _archiveGrid,
-            Database.Query(
-                """
-                SELECT Id, FullName AS 'Гость', RoomNumber AS 'Номер',
-                       CheckInDate AS 'Заезд', CheckOutDate AS 'Выезд',
-                       CreatedAt AS 'Дата архивации'
-                FROM GuestArchive
-                ORDER BY Id DESC;
-                """));
+        SetGrid(_staysGrid,Database.Query("""
+            SELECT s.Id,g.LastName||' '||g.FirstName AS 'Гость',r.Number AS 'Номер',s.CheckInDate AS 'Заезд',s.PlannedCheckOutDate AS 'Плановый выезд',
+                CASE WHEN s.PlannedCheckOutDate<=hotel_today() THEN 'Выезд просрочен' ELSE '' END AS 'Внимание',s.Notes AS 'Примечание'
+            FROM Stays s JOIN Guests g ON g.Id=s.GuestId JOIN Rooms r ON r.Id=s.RoomId WHERE s.Status='Проживает' ORDER BY s.PlannedCheckOutDate,r.Number
+            """));
+        SetGrid(_archiveGrid,Database.Query("""
+            SELECT a.StayId AS Id,a.FullName AS 'Гость',a.RoomNumber AS 'Номер',a.CheckInDate AS 'Заезд',a.CheckOutDate AS 'Выезд',
+                s.SettlementKopecks/100.0 AS 'Счёт',CASE WHEN s.SettlementKopecks IS NULL THEN 'Требуется сверка' WHEN s.IsLegacyEstimated=1 THEN 'Исторический тариф приблизителен' ELSE '' END AS 'Внимание'
+            FROM GuestArchive a JOIN Stays s ON s.Id=a.StayId ORDER BY a.Id DESC
+            """));
     }
-
-    private void FindAvailableRooms()
-    {
-        RunSafely(() =>
-        {
-            SetGrid(
-                _availableRoomsGrid,
-                Database.Query(
-                    """
-                    SELECT r.Id, r.Number AS 'Номер', rt.Name AS 'Тип',
-                           r.Floor AS 'Этаж', r.Capacity AS 'Мест',
-                           r.DailyPrice AS 'Цена за сутки'
-                    FROM Rooms r
-                    JOIN RoomTypes rt ON rt.Id = r.RoomTypeId
-                    WHERE r.Status <> 'Ремонт'
-                      AND (@typeId = 0 OR r.RoomTypeId = @typeId)
-                      AND r.Capacity >= @capacity
-                      AND julianday(@dateFrom) < julianday(@dateTo)
-                      AND NOT EXISTS (
-                          SELECT 1 FROM Bookings b
-                          WHERE b.RoomId = r.Id
-                            AND b.Status IN ('Новое', 'Подтверждено')
-                            AND julianday(@dateFrom) < julianday(b.DateTo)
-                            AND julianday(@dateTo) > julianday(b.DateFrom)
-                      )
-                      AND NOT EXISTS (
-                          SELECT 1 FROM Stays s
-                          WHERE s.RoomId = r.Id
-                            AND s.Status = 'Проживает'
-                            AND julianday(@dateFrom) < julianday(s.PlannedCheckOutDate)
-                            AND julianday(@dateTo) > julianday(s.CheckInDate)
-                      )
-                    ORDER BY r.DailyPrice, r.Number;
-                    """,
-                    Database.P("typeId", ComboId(_availableTypeCombo)),
-                    Database.P("capacity", (int)_availableCapacityNumeric.Value),
-                    Database.P("dateFrom", DateValue(_availableFromPicker)),
-                    Database.P("dateTo", DateValue(_availableToPicker))));
-        });
-    }
-
+    private void FindAvailableRooms() => RunSafely(()=>SetGrid(_availableRoomsGrid,HotelService.Available(_availableFromPicker.RequireDate("заезд"),_availableToPicker.RequireDate("выезд"),ComboId(_availableTypeCombo),(int)_availableCapacityNumeric.Value)));
     private void UseAvailableRoomForBooking()
     {
-        var roomId = SelectedId(_availableRoomsGrid);
-        if (roomId == 0)
-        {
-            return;
-        }
-
-        _bookingRoomCombo.SelectedValue = roomId;
-        _bookingFromPicker.Value = _availableFromPicker.Value;
-        _bookingToPicker.Value = _availableToPicker.Value;
+        var room=SelectedId(_availableRoomsGrid); if(room==0)return;
+        ClearBookingForm(); _bookingRoomCombo.SelectedValue=room;
+        _bookingFromPicker.Value=_availableFromPicker.Value; _bookingToPicker.Value=_availableToPicker.Value;
+        _bookingSections.SelectedIndex=0;
     }
-
     private void LoadSelectedBooking()
     {
-        if (_loading)
-        {
-            return;
-        }
-
-        var id = SelectedId(_bookingsGrid);
-        if (id == 0)
-        {
-            return;
-        }
-
-        var row = FirstRow(Database.Query("SELECT * FROM Bookings WHERE Id = @id;", Database.P("id", id)));
-        if (row is null)
-        {
-            return;
-        }
-
-        SelectComboValue(_bookingGuestCombo, row["GuestId"]);
-        SelectComboValue(_bookingRoomCombo, row["RoomId"]);
-        _bookingFromPicker.Value = ParseDate(row["DateFrom"]);
-        _bookingToPicker.Value = ParseDate(row["DateTo"]);
-        _bookingStatusCombo.SelectedItem = Convert.ToString(row["Status"]);
-        _bookingCommentText.Text = Convert.ToString(row["Comment"]);
+        if(_loading)return;var id=SelectedId(_bookingsGrid);if(id==0){if(_bookingEditId>0)ClearBookingForm();return;}
+        var row=FirstRow(Database.Query("SELECT * FROM Bookings WHERE Id=@id",Database.P("id",id)));if(row is null)return;
+        _bookingEditId=id;SelectComboValue(_bookingGuestCombo,row["GuestId"]);SelectComboValue(_bookingRoomCombo,row["RoomId"]);
+        var from=ParseDate(row["DateFrom"]);var to=ParseDate(row["DateTo"]);
+        _bookingFromPicker.SelectedDate=from>=Database.Today?from:null;
+        _bookingToPicker.SelectedDate=from>=Database.Today?to:null;
+        var status=Convert.ToString(row["Status"]);
+        _bookingStatusCombo.DataSource=status is "Новое" or "Подтверждено"?new[]{"Новое","Подтверждено"}:new[]{status};
+        _bookingStatusCombo.SelectedItem=status;_bookingStatusCombo.Enabled=status is "Новое" or "Подтверждено";
+        _bookingCommentText.Text=Convert.ToString(row["Comment"]);
     }
-
-    private void SaveBooking(bool update)
+    private void ClearBookingForm()
     {
-        RunSafely(() =>
-        {
-            var id = SelectedId(_bookingsGrid);
-            if (update && id == 0)
-            {
-                throw new InvalidOperationException("Выберите бронирование для изменения.");
-            }
-
-            var sql = update
-                ? """
-                  UPDATE Bookings
-                     SET GuestId = @guestId, RoomId = @roomId, DateFrom = @dateFrom,
-                         DateTo = @dateTo, Status = @status, Comment = @comment
-                   WHERE Id = @id;
-                  """
-                : """
-                  INSERT INTO Bookings (GuestId, RoomId, DateFrom, DateTo, Status, Comment)
-                  VALUES (@guestId, @roomId, @dateFrom, @dateTo, @status, @comment);
-                  """;
-
-            var parameters = new List<Microsoft.Data.Sqlite.SqliteParameter>
-            {
-                Database.P("guestId", ComboId(_bookingGuestCombo)),
-                Database.P("roomId", ComboId(_bookingRoomCombo)),
-                Database.P("dateFrom", DateValue(_bookingFromPicker)),
-                Database.P("dateTo", DateValue(_bookingToPicker)),
-                Database.P("status", Convert.ToString(_bookingStatusCombo.SelectedItem)),
-                Database.P("comment", _bookingCommentText.Text.Trim())
-            };
-
-            if (update)
-            {
-                parameters.Add(Database.P("id", id));
-            }
-
-            Database.Execute(sql, parameters.ToArray());
-            RefreshAll();
-            FindAvailableRooms();
-            MessageBox.Show("Бронирование сохранено.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-        });
+        _bookingEditId=0;_bookingsGrid.ClearSelection();_bookingsGrid.CurrentCell=null;
+        _bookingGuestCombo.SelectedIndex=-1;_bookingRoomCombo.SelectedIndex=-1;
+        _bookingFromPicker.SelectedDate=null;_bookingToPicker.SelectedDate=null;
+        _bookingStatusCombo.DataSource=new[]{"Новое","Подтверждено"};_bookingStatusCombo.Enabled=true;_bookingCommentText.Clear();
     }
-
-    private void CancelBooking()
-    {
-        RunSafely(() =>
-        {
-            var id = SelectedId(_bookingsGrid);
-            if (id == 0)
-            {
-                return;
-            }
-
-            Database.Execute("UPDATE Bookings SET Status = 'Отменено' WHERE Id = @id;", Database.P("id", id));
-            RefreshAll();
-            FindAvailableRooms();
-        });
-    }
-
-    private void DeleteBooking()
-    {
-        RunSafely(() =>
-        {
-            var id = SelectedId(_bookingsGrid);
-            if (id == 0)
-            {
-                return;
-            }
-
-            if (MessageBox.Show("Удалить выбранное бронирование?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-            {
-                Database.Execute("DELETE FROM Bookings WHERE Id = @id;", Database.P("id", id));
-                RefreshAll();
-                FindAvailableRooms();
-            }
-        });
-    }
-
-    private void CheckInSelectedBooking()
-    {
-        RunSafely(() =>
-        {
-            var bookingId = SelectedId(_pendingBookingsGrid);
-            if (bookingId == 0)
-            {
-                throw new InvalidOperationException("Выберите бронь для заселения.");
-            }
-
-            var row = FirstRow(Database.Query("SELECT * FROM Bookings WHERE Id = @id;", Database.P("id", bookingId)));
-            if (row is null)
-            {
-                return;
-            }
-
-            Database.ExecuteInTransaction((connection, transaction) =>
-            {
-                Database.Insert(
-                    connection,
-                    transaction,
-                    """
-                    INSERT INTO Stays (GuestId, RoomId, BookingId, CheckInDate, PlannedCheckOutDate, Status, Notes)
-                    VALUES (@guestId, @roomId, @bookingId, @checkInDate, @plannedCheckOutDate, 'Проживает', @notes);
-                    """,
-                    Database.P("guestId", row["GuestId"]),
-                    Database.P("roomId", row["RoomId"]),
-                    Database.P("bookingId", bookingId),
-                    Database.P("checkInDate", DateTime.Today),
-                    Database.P("plannedCheckOutDate", row["DateTo"]),
-                    Database.P("notes", "Заселение выполнено на основании бронирования."));
-
-                Database.Execute(
-                    connection,
-                    transaction,
-                    "UPDATE Bookings SET Status = 'Заселен' WHERE Id = @id;",
-                    Database.P("id", bookingId));
-            });
-
-            RefreshAll();
-            FindAvailableRooms();
-            MessageBox.Show("Гость заселен.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-        });
-    }
-
-    private void CheckInWithoutBooking()
-    {
-        RunSafely(() =>
-        {
-            Database.Execute(
-                """
-                INSERT INTO Stays (GuestId, RoomId, BookingId, CheckInDate, PlannedCheckOutDate, Status, Notes)
-                VALUES (@guestId, @roomId, NULL, @checkInDate, @plannedCheckOutDate, 'Проживает', @notes);
-                """,
-                Database.P("guestId", ComboId(_stayGuestCombo)),
-                Database.P("roomId", ComboId(_stayRoomCombo)),
-                Database.P("checkInDate", DateValue(_stayCheckInPicker)),
-                Database.P("plannedCheckOutDate", DateValue(_stayPlannedOutPicker)),
-                Database.P("notes", _stayNotesText.Text.Trim()));
-
-            RefreshAll();
-            FindAvailableRooms();
-            MessageBox.Show("Карточка регистрации создана.", Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-        });
-    }
-
-    private void CheckoutSingleStay()
-    {
-        var stayId = SelectedId(_staysGrid);
-        if (stayId == 0)
-        {
-            return;
-        }
-
-        PayForStays(new[] { stayId });
-    }
+    private void SaveBooking(bool update)=>RunSafely(()=>{
+        if(update && _bookingEditId==0)throw new InvalidOperationException("Выберите бронь.");
+        var id=HotelService.SaveBooking(update?_bookingEditId:0,ComboId(_bookingGuestCombo),ComboId(_bookingRoomCombo),_bookingFromPicker.RequireDate("заезд"),_bookingToPicker.RequireDate("выезд"),Convert.ToString(_bookingStatusCombo.SelectedItem)??"",_bookingCommentText.Text);
+        _bookingEditId=id;RefreshAll();SelectGridId(_bookingsGrid,id);LoadSelectedBooking();
+    });
+    private void CancelBooking()=>RunSafely(()=>{
+        if(_bookingEditId==0)throw new InvalidOperationException("Выберите бронь.");
+        if(MessageBox.Show("Отменить выбранную бронь?",Text,MessageBoxButtons.YesNo)!=DialogResult.Yes)return;
+        HotelService.CancelBooking(_bookingEditId);RefreshAll();
+    });
+    private void DeleteBooking()=>RunSafely(()=>{
+        if(_bookingEditId==0)throw new InvalidOperationException("Выберите отменённую бронь.");
+        if(MessageBox.Show("Удалить отменённую бронь без проживания?",Text,MessageBoxButtons.YesNo)!=DialogResult.Yes)return;
+        HotelService.DeleteBooking(_bookingEditId);ClearBookingForm();RefreshAll();
+    });
+    private void CheckInSelectedBooking()=>RunSafely(()=>{
+        var id=SelectedId(_pendingBookingsGrid);if(id==0)throw new InvalidOperationException("Выберите подтверждённую бронь, действующую сегодня.");
+        HotelService.CheckIn(0,0,Database.Today,"Заселение по брони",id);RefreshAll();
+    });
+    private void CheckInWithoutBooking()=>RunSafely(()=>{
+        HotelService.CheckIn(ComboId(_stayGuestCombo),ComboId(_stayRoomCombo),_stayPlannedOutPicker.RequireDate("плановый выезд"),_stayNotesText.Text);RefreshAll();
+    });
+    private void CheckoutSingleStay()=>RunSafely(()=>{
+        var id=SelectedId(_staysGrid);if(id==0)throw new InvalidOperationException("Выберите активное проживание.");
+        ShowCheckout(new[]{id});
+    });
 }

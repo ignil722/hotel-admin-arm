@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using HotelAdminArm;
 using Microsoft.Data.Sqlite;
 
@@ -8,10 +8,12 @@ internal static partial class Database
 {
     private const string DateFormat = "yyyy-MM-dd";
 
-    public static string DataFolder { get; } =
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HotelAdminArm");
-
-    public static string DatabasePath { get; } = Path.Combine(DataFolder, "hotel.db");
+    public static string DatabasePath { get; set; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "HotelAdminArm", "hotel.db");
+    public static string DataFolder => Path.GetDirectoryName(Path.GetFullPath(DatabasePath))!;
+    public static Func<DateTime> Clock { get; set; } = () => DateTime.Now;
+    public static DateTime Now => Clock();
+    public static DateTime Today => Clock().Date;
 
     public static string ConnectionString
     {
@@ -29,26 +31,45 @@ internal static partial class Database
         }
     }
 
-    public static void Initialize()
+    public static void Initialize(bool demonstrationData = true)
     {
-        Directory.CreateDirectory(DataFolder);
-
-        using var connection = OpenConnection();
-        ExecuteBatch(connection, SchemaSql);
-
-        var roomCount = Scalar<long>(connection, null, "SELECT COUNT(*) FROM Rooms");
-        if (roomCount == 0)
+        var key=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(Path.GetFullPath(DatabasePath).ToUpperInvariant())));
+        using var startup=new Mutex(false,"Local\\HotelAdminArm-"+key);
+        var acquired=false;
+        try
         {
-            Seed(connection);
+            try { acquired=startup.WaitOne(TimeSpan.FromSeconds(30)); }
+            catch(AbandonedMutexException) { acquired=true; }
+            if(!acquired)throw new InvalidOperationException("Другой экземпляр обновляет базу. Повторите запуск после завершения обновления.");
+            Directory.CreateDirectory(DataFolder);
+            using var connection=OpenConnection();
+            bool fresh;
+            using(var tx=connection.BeginTransaction())
+            {
+                fresh=Scalar<long>(connection,tx,"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='Rooms'")==0;
+                if(fresh)
+                {
+                    Execute(connection,tx,SchemaSql);
+                    if(demonstrationData)SeedValues(connection,tx);
+                }
+                tx.Commit();
+            }
+            UpgradeSchema(connection,fresh);
         }
-
-        ApplyMigrations(connection);
+        finally { if(acquired)startup.ReleaseMutex(); }
     }
 
     public static SqliteConnection OpenConnection()
     {
         var connection = new SqliteConnection(ConnectionString);
         connection.Open();
+        // Функции регистрируются на каждом подключении: триггеры проверяют те же местные дату и время.
+        connection.CreateFunction("hotel_meal_deadline", (string kind) => kind=="None"?"24:00:00":Domain.HotelService.MealDeadline(kind).ToString(@"hh\:mm\:ss"), isDeterministic: true);
+        connection.CreateFunction("hotel_now", () => Now.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture), isDeterministic: false);
+        connection.CreateFunction("hotel_today", () => Today.ToString(DateFormat), isDeterministic: false);
+        connection.CreateFunction("hotel_passport", (string value) => Domain.HotelService.NormalizePassport(value), isDeterministic: true);
+        connection.CreateFunction("hotel_meal_kind", (string value) => Domain.HotelService.SuggestedMealKind(value), isDeterministic: true);
 
         using var command = connection.CreateCommand();
         command.CommandText = "PRAGMA foreign_keys = ON;";
@@ -70,12 +91,7 @@ internal static partial class Database
     public static DataTable Query(string sql, params SqliteParameter[] parameters)
     {
         using var connection = OpenConnection();
-        using var command = BuildCommand(connection, null, sql, parameters);
-        using var reader = command.ExecuteReader();
-
-        var table = new DataTable();
-        table.Load(reader);
-        return table;
+        return Read(connection, null, sql, parameters);
     }
 
     public static int Execute(string sql, params SqliteParameter[] parameters)
@@ -168,78 +184,10 @@ internal static partial class Database
         return value switch
         {
             null => DBNull.Value,
-            DateTime dateTime => dateTime.ToString(DateFormat),
+            DateTime dateTime => dateTime.ToString(DateFormat, System.Globalization.CultureInfo.InvariantCulture),
             decimal decimalValue => Convert.ToDouble(decimalValue),
             _ => value
         };
     }
 
-    private static void ExecuteBatch(SqliteConnection connection, string sql)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = sql;
-        command.ExecuteNonQuery();
-    }
-
-    private static void ApplyMigrations(SqliteConnection connection)
-    {
-        var designVersion = GetSetting(connection, "DesignVersion");
-        if (designVersion == HotelBranding.DesignVersion.ToString())
-        {
-            return;
-        }
-
-        using var transaction = connection.BeginTransaction();
-        try
-        {
-            Execute(
-                connection,
-                transaction,
-                "INSERT OR REPLACE INTO AppSettings (Key, Value) VALUES ('HotelName', @hotelName);",
-                P("hotelName", HotelBranding.HotelName));
-
-            using var select = connection.CreateCommand();
-            select.Transaction = transaction;
-            select.CommandText = "SELECT Id, Number, RoomTypeId FROM Rooms ORDER BY Id;";
-            using var reader = select.ExecuteReader();
-
-            var rooms = new List<(int Id, string Number, int RoomTypeId)>();
-            while (reader.Read())
-            {
-                rooms.Add((reader.GetInt32(0), reader.GetString(1), reader.GetInt32(2)));
-            }
-
-            foreach (var room in rooms)
-            {
-                Execute(
-                    connection,
-                    transaction,
-                    "UPDATE Rooms SET Photo = @photo, Notes = @notes WHERE Id = @id;",
-                    P("photo", HotelBranding.CreateRoomImage(room.Number, room.RoomTypeId)),
-                    P("notes", $"Номер гостиницы {HotelBranding.HotelName}. Фото обновлено в рамках дизайн-версии {HotelBranding.DesignVersion}."),
-                    P("id", room.Id));
-            }
-
-            Execute(
-                connection,
-                transaction,
-                "INSERT OR REPLACE INTO AppSettings (Key, Value) VALUES ('DesignVersion', @version);",
-                P("version", HotelBranding.DesignVersion));
-
-            transaction.Commit();
-        }
-        catch
-        {
-            transaction.Rollback();
-            throw;
-        }
-    }
-
-    private static string? GetSetting(SqliteConnection connection, string key)
-    {
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Value FROM AppSettings WHERE Key = @key;";
-        command.Parameters.Add(P("key", key));
-        return Convert.ToString(command.ExecuteScalar());
-    }
 }

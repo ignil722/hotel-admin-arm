@@ -9,24 +9,20 @@ internal static partial class Database
     {
         using var transaction = connection.BeginTransaction();
 
-        try
-        {
-            SeedRoomTypes(connection, transaction);
-            SeedRooms(connection, transaction);
-            SeedGuests(connection, transaction);
-            SeedServices(connection, transaction);
-            SeedBookings(connection, transaction);
-            SeedStays(connection, transaction);
-            SeedServiceOrders(connection, transaction);
-            SeedPayments(connection, transaction);
+        SeedValues(connection,transaction);
+        transaction.Commit();
+    }
 
-            transaction.Commit();
-        }
-        catch
-        {
-            transaction.Rollback();
-            throw;
-        }
+    private static void SeedValues(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        SeedRoomTypes(connection, transaction);
+        SeedRooms(connection, transaction);
+        SeedGuests(connection, transaction);
+        SeedServices(connection, transaction);
+        SeedBookings(connection, transaction);
+        SeedStays(connection, transaction);
+        SeedServiceOrders(connection, transaction);
+        SeedPayments(connection, transaction);
     }
 
     private static void SeedRoomTypes(SqliteConnection connection, SqliteTransaction transaction)
@@ -136,7 +132,7 @@ internal static partial class Database
                 P("lastName", lastNames[i]),
                 P("firstName", firstNames[i]),
                 P("middleName", middleNames[i]),
-                P("birthDate", DateTime.Today.AddYears(-24 - i).AddDays(i * 9)),
+                P("birthDate", Database.Today.AddYears(-24 - i).AddDays(i * 9)),
                 P("passport", $"45{12 + i:00} {345678 + i:000000}"),
                 P("phone", $"+7 920 100-10-{i + 1:00}"),
                 P("email", $"guest{i + 1:00}@example.ru"),
@@ -175,7 +171,7 @@ internal static partial class Database
     {
         for (var i = 0; i < 10; i++)
         {
-            var arrival = DateTime.Today.AddDays(8 + i);
+            var arrival = Database.Today.AddDays(8 + i);
             var departure = arrival.AddDays(2 + i % 3);
 
             Insert(
@@ -198,8 +194,8 @@ internal static partial class Database
     {
         for (var i = 0; i < 8; i++)
         {
-            var checkIn = DateTime.Today.AddDays(-1 - i % 3);
-            var plannedCheckOut = DateTime.Today.AddDays(2 + i % 4);
+            var checkIn = Database.Today.AddDays(-1 - i % 3);
+            var plannedCheckOut = Database.Today.AddDays(2 + i % 4);
 
             Insert(
                 connection,
@@ -217,7 +213,7 @@ internal static partial class Database
 
         for (var i = 0; i < 5; i++)
         {
-            var checkIn = DateTime.Today.AddDays(-35 - i * 2);
+            var checkIn = Database.Today.AddDays(-35 - i * 2);
             var actualCheckOut = checkIn.AddDays(2 + i % 2);
             var stayId = Insert(
                 connection,
@@ -262,16 +258,17 @@ internal static partial class Database
                 """,
                 P("stayId", stayId),
                 P("serviceId", 1 + stayId % 5),
-                P("quantity", 1 + stayId % 3),
-                P("orderDate", DateTime.Today.AddDays(-stayId % 3)));
+                P("quantity", 1 + stayId % 5 <= 3 ? 1 : 1 + stayId % 3),
+                P("orderDate", Database.Today.AddDays(-stayId % 3)));
         }
     }
 
     private static void SeedPayments(SqliteConnection connection, SqliteTransaction transaction)
     {
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < 5; i++)
         {
-            var amount = 6400 + i * 1250;
+            var amount = Scalar<double>(connection, transaction,
+                "SELECT (julianday(s.ActualCheckOutDate)-julianday(s.CheckInDate))*r.DailyPrice FROM Stays s JOIN Rooms r ON r.Id=s.RoomId WHERE s.Id=@id", P("id", 9+i));
             var paymentId = Insert(
                 connection,
                 transaction,
@@ -280,7 +277,7 @@ internal static partial class Database
                 VALUES (@payerGuestId, @paymentDate, @amount, @method, @comment);
                 """,
                 P("payerGuestId", 19 + i),
-                P("paymentDate", DateTime.Today.AddDays(-20 - i)),
+                P("paymentDate", Scalar<string>(connection, transaction, "SELECT ActualCheckOutDate FROM Stays WHERE Id=@id", P("id", 9+i))),
                 P("amount", amount),
                 P("method", i % 2 == 0 ? "Наличные" : "Банковская карта"),
                 P("comment", "Демонстрационная оплата архивного проживания."));
